@@ -191,31 +191,66 @@ void AutoCell::placeTrans(bool speculate, int saquality, int nrAttempts, int wC,
   if (speculate) {
     vector<TransitorTerminal> bestNOrdering;
     vector<TransitorTerminal> bestPOrdering;
+    int nrRouted = 0, nrFailed = 0;
+    // Each attempt below is an independent random ordering -- transPlacement is
+    // called with newPl, and the Threshold Accepting search draws from rand()
+    // without ever reseeding -- so one ordering being unroutable says nothing
+    // about the others.  route() signals that by throwing, and letting it
+    // escape this loop aborted the whole command and discarded the attempts
+    // that had already succeeded: with nrAttempts = 3 a single bad draw lost
+    // two good placements.  So each attempt is guarded, a failure only
+    // eliminates that attempt, and the cheapest routable ordering wins.  If
+    // none of them routes there is nothing to return and we throw as before.
+    //
+    // route() rebuilds its GraphRouter from scratch on entry, so a failed
+    // attempt leaves no state behind for the next one.  It throws before its
+    // own "state = 5", which is why the catch restores state itself.
     // get previosly cost
+    bestCost = -1;
     if (currentNetList.getOrderingP().size() != 0 && currentNetList.getOrderingN().size() != 0) {
       state = 4;
-      route(true, false, 1, false);
+      try {
+        route(true, false, 1, false);
+        bestCost = rt->getCost();
+        bestNOrdering = currentNetList.getOrderingN();
+        bestPOrdering = currentNetList.getOrderingP();
+        ++nrRouted;
+      } catch (AstranError &e) {
+        ++nrFailed;
+        cout << "-> The incoming ordering is not routable (" << e.what()
+             << "); ignoring it" << endl;
+      }
       state = 3;
-      bestCost = rt->getCost();
-      bestNOrdering = currentNetList.getOrderingN();
-      bestPOrdering = currentNetList.getOrderingP();
-    } else
-      bestCost = -1;
+    }
 
     for (int c = 0; c < nrAttempts; c++) {
       if (!currentNetList.transPlacement(true, saquality, 1, wC, gmC, rC, congC, ngC, currentCircuit->getVddNet(), currentCircuit->getGndNet()))
         throw AstranError("Could not place the transistors");
       state = 4;
-      route(true, false, 1, false);
-      state = 3;
-      currentCost = rt->getCost();
-      if (bestCost == -1 || currentCost < bestCost) {
-        bestCost = currentCost;
-        bestNOrdering = currentNetList.getOrderingN();
-        bestPOrdering = currentNetList.getOrderingP();
-        cout << "-> New best transistor ordering found with cost: " << bestCost << endl;
+      try {
+        route(true, false, 1, false);
+        currentCost = rt->getCost();
+        ++nrRouted;
+        if (bestCost == -1 || currentCost < bestCost) {
+          bestCost = currentCost;
+          bestNOrdering = currentNetList.getOrderingN();
+          bestPOrdering = currentNetList.getOrderingP();
+          cout << "-> New best transistor ordering found with cost: " << bestCost << endl;
+        }
+      } catch (AstranError &e) {
+        ++nrFailed;
+        cout << "-> Attempt " << (c + 1) << " of " << nrAttempts
+             << " is not routable (" << e.what() << "); skipping it" << endl;
       }
+      state = 3;
     }
+
+    if (nrFailed)
+      cout << "-> " << nrRouted << " of " << (nrRouted + nrFailed)
+           << " orderings were routable" << endl;
+    if (bestCost == -1)
+      throw AstranError("None of the " + to_string(nrAttempts) +
+                        " transistor orderings could be routed");
     currentNetList.setOrderingN(bestNOrdering);
     currentNetList.setOrderingP(bestPOrdering);
   } else {

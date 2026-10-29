@@ -76,7 +76,7 @@ FFLAGS =
 ASFLAGS =
 
 # Link Libraries and Options
-LDLIBSOPTIONS = `wx-config --libs`
+LDLIBSOPTIONS = `wx-config --libs` -ledit
 
 # Build Targets
 .build-conf: ${BUILD_SUBPROJECTS}
